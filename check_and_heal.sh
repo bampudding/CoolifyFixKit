@@ -158,9 +158,8 @@ while $RUNNING; do
             HEALED_AT["$domain"]=0
         else
             # 이미 쿨다운 중인 도메인은 카운트만 증가 X
-            local now
             now=$(date +%s)
-            local last_heal=${HEALED_AT["$domain"]:-0}
+            last_heal=${HEALED_AT["$domain"]:-0}
             if [ "$last_heal" -ne 0 ] && [ $((now - last_heal)) -lt "$COOLDOWN_PERIOD" ]; then
                 continue
             fi
