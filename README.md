@@ -132,6 +132,8 @@ Debian의 `/etc/coolify-fixkit/discord.json`에 `bot_token`, `recipient_id`를 �
 
 `deploy/coolify-fixkit-discord.service`는 독립 알림 서비스다. OOM 카운터 증가, 15초 이상 자원 압박, 압박 해소를 감시하고 host guard의 정책 오류/Resource Guard의 복구 이벤트도 받는다. 감시/발송 실패는 중요 서비스의 종료·재시작으로 이어지지 않는다. 정상 상태나 매 관측 주기를 DM으로 보내지 않는다.
 
+서비스 재시작 시 런타임 디렉터리를 유지해 이미 실행 중인 resource-guard의 디렉터리 bind mount에서도 새 소켓을 볼 수 있게 한다. Unix 소켓 파일 자체는 기동할 때 다시 만든다.
+
 동일 종류/대상은 5분 중복 제한을 적용한다. 최대 100개 영속 outbox, Discord rate limit에 따른 재시도와 nonce를 사용한다. 네트워크/Discord 오류나 DM 거부 시 알림이 지연될 수 있으며 전송 성공은 읽음 확인과 다르다.
 
 ```sh

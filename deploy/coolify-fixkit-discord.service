@@ -9,6 +9,7 @@ Restart=on-failure
 RestartSec=10
 RuntimeDirectory=coolify-fixkit
 RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 StateDirectory=coolify-fixkit
 StateDirectoryMode=0700
 UMask=0077
