@@ -96,7 +96,7 @@ docker compose -f docker-compose.yml -f compose.incus.yml config --quiet
 
 각각 기존 read 7,200 / write 12,600 IOPS도 유지한다. 이 정책은 `/etc/coolify-fixkit/host-policy.json`이 소유한다. 한도 변경 시 이 파일을 검토하고 서비스를 재시작한다. `raw.lxc`에 별도 memory.high를 다시 추가해 두 소유자가 경쟁하게 만들지 않는다. 이 정책은 이름을 명시한 3개 인스턴스에만 적용한다.
 
-60초 간격 `host-io` 로그에는 guest별 I/O 누적값, RAM 한도/사용량, file refault와 직접 회수, 상위 프로세스별 실제 read/write bytes 변화가 기록된다. 명령 인자와 환경변수는 수집하지 않는다. 속도 상한은 폭주를 제한하지만 일일 누적 쓰기 감소를 보장하지 않는다. 생산 작업과 metadata CoW의 영향은 이 기록으로 구분해 후속 조정한다.
+60초 간격 `host-io` 로그에는 guest별 I/O 누적값, RAM 한도/사용량, file refault와 직접 회수, 상위 프로세스별 실제 read/write bytes 변화가 기록된다. 명령 인자와 환경변수는 수집하지 않는다. 속도 상한은 폭주를 제한하지만 일일 누적 쓰기 감소를 보장하지 않는다. 생산 작업과 metadata CoW의 영향은 이 기록으로 구분해 후속 조정한다. [최근 로그 검토와 개선 우선순위](docs/2026-10-31_log-review.md)를 참고한다.
 
 ```sh
 systemctl status coolify-fixkit-host.service

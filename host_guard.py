@@ -124,13 +124,39 @@ def is_build(comm,args=b''):
 def critical_container_groups(names):
     groups=[]
     for name in names:
-        completed=subprocess.run(['docker','inspect','--format','{{.Id}}',name],
+        completed=subprocess.run(['docker','inspect','--type','container','--format','{{.Id}}',name],
             capture_output=True,text=True,timeout=3,check=False)
         ident=completed.stdout.strip()
         if completed.returncode or not re.fullmatch(r'[a-f0-9]{64}',ident):
-            raise RuntimeError('critical container identity unavailable')
+            # Keep command output (potential credentials/URLs) out of logs.
+            reason='invalid-identity'
+            if completed.returncode:
+                error=completed.stderr.lower()
+                reason=next((key for key,text in (
+                    ('target-missing','no such'),('daemon-unavailable','cannot connect'),
+                    ('permission-denied','permission denied')) if text in error),'inspect-failed')
+            raise DiscoveryError(reason,completed.returncode)
         groups.append('/system.slice/docker-'+ident+'.scope')
     return groups
+
+
+class DiscoveryError(RuntimeError):
+    def __init__(self,reason,returncode):
+        self.reason=reason;self.returncode=returncode
+
+
+def protection_step(root,policy,container_groups,apply,refresh):
+    """An unavailable Docker API must not skip Incus/guest protection."""
+    error=None
+    if refresh:
+        try:
+            container_groups=critical_container_groups(policy.get('oom_protection',{}).get('containers',[]))
+        except (OSError,ValueError,RuntimeError,subprocess.TimeoutExpired) as exc:
+            error={'error':type(exc).__name__}
+            if isinstance(exc,DiscoveryError):
+                error.update(reason=exc.reason,returncode=exc.returncode)
+    changed=protect(root,policy,container_groups,apply)
+    return container_groups,changed,error
 
 
 def protect(root,policy,container_groups,apply):
@@ -268,11 +294,15 @@ def main():
     old_io=process_io();old_time=time.monotonic();next_sample=old_time
     container_groups=[];next_discovery=0
     while not stop.is_set():
+        discovery_error=None
         try:
-            if time.monotonic()>=next_discovery:
-                container_groups=critical_container_groups(policy.get('oom_protection',{}).get('containers',[]))
-                next_discovery=time.monotonic()+30
-            changed=protect(root,policy,container_groups,args.apply)
+            refresh=time.monotonic()>=next_discovery
+            container_groups,changed,discovery_error=protection_step(root,policy,container_groups,args.apply,refresh)
+            if refresh:next_discovery=time.monotonic()+(5 if discovery_error else 30)
+            if discovery_error:
+                print(json.dumps({'time':time.time(),'event':'container-discovery-error',
+                    'cached_groups':len(container_groups),**discovery_error}),flush=True)
+                post_event('policy-error','debian','Caddy의 Docker 정보 조회에 실패했습니다. 기존 대상과 Incus/운영 guest의 OOM 보호 적용은 계속합니다. 5초 뒤 재시도합니다.')
             if any(changed.values()):
                 print(json.dumps({'time':time.time(),'event':'oom-priority','apply':args.apply,**changed}),flush=True)
         except (OSError,ValueError,RuntimeError,subprocess.TimeoutExpired) as exc:
@@ -296,7 +326,7 @@ def main():
                 'memory_pressure':Path('/proc/pressure/memory').read_text().strip(),
                 'io_pressure':Path('/proc/pressure/io').read_text().strip()}),flush=True)
             old_io=current;old_time=now;next_sample=now+60
-        if args.once:return 0
+        if args.once:return 1 if discovery_error else 0
         stop.wait(5)
     return 0
 

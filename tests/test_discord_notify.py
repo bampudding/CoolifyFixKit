@@ -1,9 +1,12 @@
 import json
+import copy
+import io
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 import discord_notify as d
+from test_resource_guard import sample
 
 class NotifyTests(unittest.TestCase):
     def setUp(self):
@@ -38,3 +41,18 @@ class NotifyTests(unittest.TestCase):
         nonce=self.delivery.data['pending'][0]['nonce']
         self.assertFalse(self.delivery.deliver());self.assertEqual(self.delivery.data['pending'][0]['nonce'],nonce)
         self.assertFalse(self.delivery.deliver());self.assertEqual(request.call_count,1)
+
+    def test_pressure_transition_records_metrics_then_recovers_without_spam(self):
+        healthy=sample();busy=copy.deepcopy(healthy)
+        busy['host']['io_psi']['full']['avg10']=25.5
+        stop=Mock();stop.is_set.side_effect=[False]*6+[True]
+        output=io.StringIO()
+        with patch.object(d.metrics,'snapshot',side_effect=[busy]*3+[healthy]*3),patch.object(self.delivery,'deliver'),patch('sys.stdout',output):
+            d.watch(self.delivery,stop)
+        self.assertEqual([x['key'] for x in self.delivery.data['pending']],['pressure:debian','recovered:debian'])
+        self.assertIn('12288MiB',self.delivery.data['pending'][0]['text'])
+        self.assertIn('25.50%',self.delivery.data['pending'][0]['text'])
+        events=[json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual([x['event'] for x in events],['resource-pressure','resource-recovered'])
+        self.assertEqual(events[0]['io_full_avg10'],25.5)
+        self.assertFalse(self.delivery.data['pressure_active'])

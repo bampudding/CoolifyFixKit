@@ -57,6 +57,30 @@ class HostGuardTests(unittest.TestCase):
 
 
 class OomPriorityTests(unittest.TestCase):
+    @patch.object(h,'protect',return_value={'critical':2,'build':0})
+    @patch.object(h,'critical_container_groups',side_effect=h.DiscoveryError('daemon-unavailable',1))
+    def test_docker_failure_preserves_cached_targets_and_still_protects(self,discover,protect):
+        cached=['/system.slice/docker-existing.scope'];policy={'oom_protection':{'containers':['coolify-proxy']}}
+        groups,changed,error=h.protection_step(Path('/cg'),policy,cached,True,True)
+        self.assertEqual(groups,cached);self.assertEqual(changed['critical'],2)
+        self.assertEqual(error['reason'],'daemon-unavailable')
+        protect.assert_called_once_with(Path('/cg'),policy,cached,True)
+
+    @patch.object(h,'protect',return_value={})
+    @patch.object(h,'critical_container_groups',side_effect=h.subprocess.TimeoutExpired('docker',3))
+    def test_initial_discovery_timeout_still_protects_known_guest_and_units(self,discover,protect):
+        policy={'oom_protection':{'instances':['fedora-musecat'],'units':['incus.service']}}
+        groups,_,error=h.protection_step(Path('/cg'),policy,[],True,True)
+        self.assertEqual(groups,[]);self.assertEqual(error['error'],'TimeoutExpired')
+        protect.assert_called_once_with(Path('/cg'),policy,[],True)
+
+    @patch.object(h.subprocess,'run')
+    def test_discovery_logs_only_fixed_reason_and_exit_code(self,run):
+        run.return_value=h.subprocess.CompletedProcess([],1,'','Cannot connect to daemon: secret-url')
+        with self.assertRaises(h.DiscoveryError) as raised:h.critical_container_groups(['coolify-proxy'])
+        self.assertEqual(raised.exception.reason,'daemon-unavailable')
+        self.assertNotIn('secret',str(raised.exception))
+
     def test_critical_is_last_resort_and_existing_immunity_preserved(self):
         self.assertEqual(h.priority(0,True,False),-950)
         self.assertEqual(h.priority(-1000,True,False),-1000)

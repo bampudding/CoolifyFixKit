@@ -119,11 +119,19 @@ def watch(delivery,stop):
                 reasons.extend(name+':'+r for r in metrics.reasons(sample,guest=guest) if r in ('guest-memory-pressure','guest-io-stall'))
             bad=bad+1 if reasons else 0;good=good+1 if not reasons else 0
             if bad>=3 and not active:
-                delivery.enqueue({'kind':'pressure','scope':'debian','message':'15초 이상 자원 압박 지속: '+', '.join(reasons)})
+                host=sample['host']
+                context={'event':'resource-pressure','time':sample['time'],'reasons':reasons,
+                    'available_mib':round(host['available']/metrics.MIB),
+                    'memory_some_avg10':host['memory_psi']['some']['avg10'],
+                    'io_full_avg10':host['io_psi']['full']['avg10']}
+                print(json.dumps(context),flush=True)
+                detail=f"여유 RAM {context['available_mib']}MiB, 메모리 대기 {context['memory_some_avg10']:.2f}%, I/O 전체 대기 {context['io_full_avg10']:.2f}%. "
+                delivery.enqueue({'kind':'pressure','scope':'debian','message':('15초 이상 자원 압박 지속. '+detail+'원인: '+', '.join(reasons))[:1200]})
                 active=True
                 with delivery.mutex:
                     delivery.data['pressure_active']=True;delivery.save()
             if active and good>=3:
+                print(json.dumps({'event':'resource-recovered','time':sample['time']}),flush=True)
                 delivery.enqueue({'kind':'recovered','scope':'debian','message':'메모리 및 I/O 압박이 해소됐습니다. 애플리케이션 상태는 별도 확인이 필요합니다.'})
                 active=False
                 with delivery.mutex:
