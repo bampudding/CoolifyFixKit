@@ -1,0 +1,31 @@
+[Unit]
+Description=CoolifyFixKit private Discord DM webhook and alerts
+After=network-online.target coolify-fixkit-host.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/lib/coolify-fixkit/discord_notify.py
+Restart=on-failure
+RestartSec=10
+RuntimeDirectory=coolify-fixkit
+RuntimeDirectoryMode=0700
+StateDirectory=coolify-fixkit
+StateDirectoryMode=0700
+UMask=0077
+User=root
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=96M
+MemorySwapMax=0
+CPUQuota=10%
+TasksMax=16
+OOMScoreAdjust=-900
+
+[Install]
+WantedBy=multi-user.target

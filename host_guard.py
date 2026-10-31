@@ -13,6 +13,7 @@ import signal
 import subprocess
 import threading
 import time
+from event_webhook import post_event
 
 MIB = 1024**2
 
@@ -276,6 +277,7 @@ def main():
                 print(json.dumps({'time':time.time(),'event':'oom-priority','apply':args.apply,**changed}),flush=True)
         except (OSError,ValueError,RuntimeError,subprocess.TimeoutExpired) as exc:
             print(json.dumps({'time':time.time(),'event':'protection-error','error':type(exc).__name__}),flush=True)
+            post_event('policy-error','debian','중요 서비스 OOM 보호 정책 적용에 실패했습니다.')
             if args.once:return 1
         for name,p in policy['instances'].items():
             try:
@@ -284,6 +286,7 @@ def main():
                     print(json.dumps({'time':time.time(),'event':'host-policy','apply':args.apply,**result}),flush=True)
             except (OSError,ValueError,RuntimeError) as e:
                 print(json.dumps({'time':time.time(),'event':'policy-error','instance':name,'error':type(e).__name__}),flush=True)
+                post_event('policy-error',name,'메모리 또는 SSD 한도 정책 적용에 실패했습니다.')
                 if args.once:return 1
         if time.monotonic()>=next_sample:
             current=process_io();now=time.monotonic()

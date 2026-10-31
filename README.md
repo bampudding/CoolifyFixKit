@@ -123,3 +123,21 @@ musecat cgroup에는 `memory.low=4GiB`의 best-effort 회수 보호와 `user.oom
 이 정책은 전역 OOM 우선순위를 바꾸며, musecat 자체의 hard cap 또는 내부 Docker hard cap을 없애지는 않는다. 해당 cgroup 자체가 한도에 도달하면 커널은 다른 cgroup의 개발 작업을 희생시킬 수 없다. 총 용량/실제 working set과 개별 hard cap은 계속 별도로 관리해야 한다.
 
 Incus의 재시작 후에도 Exec OOM 우선순위를 유지하려면 `deploy/incus-oom-protection.conf`를 `/etc/systemd/system/incus.service.d/85-fixkit-oom.conf`에 둔다. 기존 프로세스는 보조 서비스가 live 보호하므로 이 파일을 적용하기 위해 Incus를 재시작하지 않는다.
+
+## 같은 Discord 봇으로 개인 알림 받기
+
+`discord_notify.py`는 root 전용 Unix 소켓 `/run/coolify-fixkit/notify.sock`의 `POST /events` 웹훅을 받아 기존 CoSAI Discord 봇의 REST API로 소유자에게 DM을 보낸다. Discord의 채널용 incoming webhook URL을 DM 주소로 사용하지 않는다. 별도 Gateway 로그인이나 두 번째 CoSAI 클라이언트를 실행하지 않는다.
+
+Debian의 `/etc/coolify-fixkit/discord.json`에 `bot_token`, `recipient_id`를 저장하며 권한은 root 0600이다. 현재 값은 heart Coolify의 기존 Discord 서비스 토큰과 확인한 봇 소유자에서 가져왔다. 이 파일은 저장소나 Healer 컨테이너에 전달하지 않는다. 토큰 교체 시 이 비공개 파일도 갱신한다.
+
+`deploy/coolify-fixkit-discord.service`는 독립 알림 서비스다. OOM 카운터 증가, 15초 이상 자원 압박, 압박 해소를 감시하고 host guard의 정책 오류/Resource Guard의 복구 이벤트도 받는다. 감시/발송 실패는 중요 서비스의 종료·재시작으로 이어지지 않는다. 정상 상태나 매 관측 주기를 DM으로 보내지 않는다.
+
+동일 종류/대상은 5분 중복 제한을 적용한다. 최대 100개 영속 outbox, Discord rate limit에 따른 재시도와 nonce를 사용한다. 네트워크/Discord 오류나 DM 거부 시 알림이 지연될 수 있으며 전송 성공은 읽음 확인과 다르다.
+
+```sh
+systemctl status coolify-fixkit-discord.service
+python3 /usr/local/lib/coolify-fixkit/discord_notify.py --test
+journalctl -u coolify-fixkit-discord.service -o cat
+```
+
+테스트 명령은 실행 중인 웹훅으로 한 건을 보내 실제 DM 발송을 요청한다. 로컬 웹훅은 `kind`(oom/pressure/recovered/policy-error/recovery/test), 선택적 `scope`, `message`만 받으며 외부 TCP 포트는 열지 않는다. 소켓 디렉터리를 선택적으로 resource-guard에 읽기 전용 마운트하면 컨테이너 복구 이벤트도 전달할 수 있다. 소켓이 없을 때 guard는 기존 작업을 계속한다.

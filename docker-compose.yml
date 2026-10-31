@@ -47,6 +47,7 @@ services:
       - /proc:/host/proc:ro
       - /sys/fs/cgroup:/host/cgroup:ro
       - guard-state:/state
+      - /run/coolify-fixkit:/run/coolify-fixkit:ro
     logging:
       driver: json-file
       options:

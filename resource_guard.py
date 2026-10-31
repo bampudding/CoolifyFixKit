@@ -17,6 +17,7 @@ import signal
 import subprocess
 import threading
 import time
+from event_webhook import post_event
 
 MIB = 1024**2
 GIB = 1024**3
@@ -25,6 +26,9 @@ LABEL = "io.coolify-fixkit."
 
 def emit(event, **fields):
     print(json.dumps({"time": time.time(), "event": event, **fields}), flush=True)
+    if event in ("recovery-start-requested", "recovery-error"):
+        post_event("recovery", fields.get("scope", "debian"),
+                   "컨테이너 시작 요청 완료. 건강 상태는 별도 확인이 필요합니다." if event == "recovery-start-requested" else "자동 복구 요청에 실패했습니다.")
 
 
 def keyed(text):
