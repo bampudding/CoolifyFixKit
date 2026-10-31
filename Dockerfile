@@ -1,11 +1,11 @@
-FROM alpine:latest
+FROM alpine:3.24
 
-# 필요한 도구 설치 (docker-cli, curl, bind-tools/dig, bash, jq)
-RUN apk add --no-cache docker-cli curl bind-tools bash jq
+RUN apk add --no-cache docker-cli curl bash jq python3 incus-client
 
 WORKDIR /app
 
 COPY check_and_heal.sh /app/check_and_heal.sh
+COPY resource_guard.py /app/resource_guard.py
 RUN chmod +x /app/check_and_heal.sh
 
 CMD ["/bin/bash", "/app/check_and_heal.sh"]

@@ -1,0 +1,29 @@
+[Unit]
+Description=CoolifyFixKit native Incus memory and SSD budgets
+After=incus.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/lib/coolify-fixkit/host_guard.py --policy /etc/coolify-fixkit/host-policy.json --apply
+Restart=on-failure
+RestartSec=10
+User=root
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=no
+ReadWritePaths=/sys/fs/cgroup
+RestrictAddressFamilies=AF_UNIX
+MemoryMax=96M
+MemorySwapMax=0
+CPUQuota=10%
+TasksMax=16
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+# Optional: root-equivalent Incus access for labelled guest Docker recovery.
+# Observation of every Incus cgroup already works without this socket.
+services:
+  resource-guard:
+    environment:
+      INCUS_ENABLED: "true"
+    volumes:
+      - /var/lib/incus/unix.socket:/var/lib/incus/unix.socket

@@ -1,0 +1,15 @@
+{
+  "instances": {
+    "fedora-heart": {"read_mib": 128, "write_mib": 48, "memory_high_ratio": 0.9},
+    "fedora-enxsis": {"read_mib": 64, "write_mib": 16},
+    "fedora-musecat": {"read_mib": 128, "write_mib": 64}
+  },
+  "oom_protection": {
+    "instances": ["fedora-musecat"],
+    "units": ["incus.service", "docker.service", "containerd.service"],
+    "containers": ["coolify-proxy"],
+    "critical_score_adj": -950,
+    "build_score_adj": 500,
+    "memory_low_mib": 4096
+  }
+}
