@@ -81,6 +81,12 @@ class OomPriorityTests(unittest.TestCase):
         self.assertEqual(raised.exception.reason,'daemon-unavailable')
         self.assertNotIn('secret',str(raised.exception))
 
+    @patch.object(h.subprocess,'run')
+    def test_go_thread_exhaustion_is_distinguished_from_missing_target(self,run):
+        run.return_value=h.subprocess.CompletedProcess([],2,'','runtime: failed to create new OS thread (errno=11)')
+        with self.assertRaises(h.DiscoveryError) as raised:h.critical_container_groups(['coolify-proxy'])
+        self.assertEqual(raised.exception.reason,'thread-budget')
+
     def test_critical_is_last_resort_and_existing_immunity_preserved(self):
         self.assertEqual(h.priority(0,True,False),-950)
         self.assertEqual(h.priority(-1000,True,False),-1000)

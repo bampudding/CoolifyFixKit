@@ -10,6 +10,7 @@ ExecStart=/usr/bin/python3 /usr/local/lib/coolify-fixkit/host_guard.py --policy 
 Restart=on-failure
 RestartSec=10
 User=root
+Environment=GOMAXPROCS=2
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
@@ -23,7 +24,7 @@ RestrictAddressFamilies=AF_UNIX
 MemoryMax=96M
 MemorySwapMax=0
 CPUQuota=10%
-TasksMax=16
+TasksMax=64
 
 [Install]
 WantedBy=multi-user.target

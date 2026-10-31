@@ -22,6 +22,10 @@ cgroup I/O는 계층 누적값이다. 부모·자식 수치를 합산하면 중�
 
 이번 변경은 Docker 조회 실패 시 마지막으로 확인한 Caddy cgroup을 유지하고, Incus 및 운영 guest 보호 적용은 계속한다. 최초 조회 실패로 캐시가 비어 있어도 이름이 고정된 guest/unit 보호는 적용한다. 조회는 5초 뒤 재시도하며 `container-discovery-error`에 캐시 수와 고정된 실패 분류/종료 코드를 남긴다. 원문 stderr, 환경변수, URL은 기록하지 않는다. `--once`는 조회 실패 시 보호 적용을 시도한 후에도 실패 종료 코드를 반환한다.
 
+추가 조사에서 host guard cgroup의 `pids.events`에 `max 9`를 확인했다. `TasksMax=16` 한도에 실제 도달한 기록이다. 이 서비스는 Python뿐 아니라 Go 기반 Docker CLI의 스레드도 같은 예산으로 실행한다. 과거 stderr가 없어 두 오류와의 일대일 대응은 확정할 수 없지만 간헐적인 조회 실패의 유력한 원인이다. 보조 서비스에만 `TasksMax=64`, `GOMAXPROCS=2`를 적용하고, 앞으로 Go 스레드 생성 실패는 `thread-budget`으로 구분한다. 메모리 96MiB/CPU 10% 한도와 운영 서비스 설정은 유지한다.
+
+같은 CPU/메모리 예산의 별도 transient unit에서 읽기 전용 Docker inspect를 반복해 비교했다. 기존 `TasksMax=16`에서는 12회 중 1회가 종료 코드 2로 실패했고 `pids.events max=25`가 기록됐다. 수정한 `TasksMax=64` 및 `GOMAXPROCS=2`에서는 24회 모두 성공했고 `pids.events max=0`이었다. 두 검사 모두 peak memory 약 21.7MiB였으며 운영 컨테이너의 시작·중지 작업은 없었다. 이 재현은 태스크 예산 결함을 확인하지만 과거 두 오류의 원문을 복원하는 것은 아니다.
+
 Discord 압박 알림에는 여유 RAM, 메모리 PSI some avg10, I/O PSI full avg10을 넣었다. 압박/해소 전환 시 같은 시각의 구조화 로그도 기록해 다음 검토에서 근거 수치를 찾을 수 있다. 정상 5초 관측마다 로그/DM을 추가하지 않는다.
 
 ## 다음 조정의 순서

@@ -133,6 +133,8 @@ def critical_container_groups(names):
             if completed.returncode:
                 error=completed.stderr.lower()
                 reason=next((key for key,text in (
+                    ('thread-budget','failed to create new os thread'),
+                    ('thread-budget','pthread_create failed'),
                     ('target-missing','no such'),('daemon-unavailable','cannot connect'),
                     ('permission-denied','permission denied')) if text in error),'inspect-failed')
             raise DiscoveryError(reason,completed.returncode)
