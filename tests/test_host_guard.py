@@ -23,6 +23,16 @@ class HostGuardTests(unittest.TestCase):
         self.assertLess(14400000000-high,4096)
         with self.assertRaises(ValueError):h.desired_high('max',0.9)
 
+    def test_committed_policy_uses_93_percent_of_each_actual_hard_limit(self):
+        import json
+        policy=json.loads((Path(__file__).resolve().parents[1]/'deploy/host-policy.json').read_text())
+        for setting in policy['instances'].values():
+            self.assertEqual(setting['memory_high_ratio'], .93)
+        for size in (19327352832, 17179869184, 5999996928):
+            high=int(h.desired_high(str(size),.93))
+            self.assertLessEqual(high,size*.93)
+            self.assertLess(size*.93-high,4096)
+
     def test_policy_rejects_paths_and_invalid_budgets(self):
         good={'instances':{'fedora-heart':{'read_mib':128,'write_mib':48,'memory_high_ratio':0.9}}}
         self.assertEqual(h.validate(good),good)

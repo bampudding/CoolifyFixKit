@@ -128,8 +128,13 @@ def reasons(sample, reserve=4 * GIB, required=0, guest=None):
     if guest is not None:
         # Respect the effective soft ceiling too: don't restart straight into
         # the reclaim/refault storm that this guard is meant to diagnose.
-        caps = [n for n in (guest["high"], guest["max"]) if n is not None]
-        if caps and guest["current"] + required > min(caps) * 0.9:
+        # Apply the ratio once to the hard allocation. memory.high is already
+        # a soft ceiling, so multiplying it again would restrict a 93% policy
+        # to 83.7%. Respect an independently stricter soft ceiling as-is.
+        caps = ([guest["max"] * 0.93] if guest["max"] is not None else [])
+        if guest["high"] is not None:
+            caps.append(guest["high"])
+        if caps and guest["current"] + required > min(caps):
             result.append("guest-memory-headroom")
     return result
 

@@ -58,8 +58,20 @@ class PressureTests(unittest.TestCase):
     def test_soft_limit_matters_before_hard_limit(self):
         s = sample()
         guest = s['guests']['lxc.payload.guest']
-        guest['current'] = 11*g.GIB
+        guest['current'] = guest['high'] + 1
         self.assertIn('guest-memory-headroom', g.reasons(s, guest=guest))
+
+    def test_93_percent_boundary_without_double_soft_discount(self):
+        s = sample(); guest = s['guests']['lxc.payload.guest']
+        guest['max'] = 10000; guest['high'] = 9300
+        guest['current'] = 9200
+        self.assertNotIn('guest-memory-headroom', g.reasons(s, guest=guest))
+        self.assertNotIn('guest-memory-headroom', g.reasons(s, required=100, guest=guest))
+        self.assertIn('guest-memory-headroom', g.reasons(s, required=101, guest=guest))
+        guest['high'] = None; guest['current'] = 9301
+        self.assertIn('guest-memory-headroom', g.reasons(s, guest=guest))
+        guest['max'] = None; guest['high'] = 9000; guest['current'] = 8900
+        self.assertNotIn('guest-memory-headroom', g.reasons(s, guest=guest))
 
     def test_missing_telemetry_blocks(self):
         s = sample()

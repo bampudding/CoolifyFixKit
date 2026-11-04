@@ -86,13 +86,13 @@ docker compose -f docker-compose.yml -f compose.incus.yml config --quiet
 
 2026-10-31 후속 조치로 `host_guard.py`를 Debian의 `coolify-fixkit-host.service`로 설치했다. 이것은 기존 Coolify TLS 컨테이너와 별도로 동작하는 호스트 보조 구성요소다. 정규 소스와 정책은 이 저장소의 `host_guard.py`, `deploy/host-policy.json`, `deploy/coolify-fixkit-host.service`다. 이 보조 서비스는 Coolify 애플리케이션 배포와 독립적으로 관리한다.
 
-설치된 Incus 7.0.1은 `128MiB,7200iops`를 거부한다. 보조 서비스는 기존 Incus IOPS 설정과 hard RAM 한도를 유지하고 `io.max`의 `rbps/wbps`만 별도로 설정한다. `fedora-heart`의 soft 한도는 실제 `memory.max`의 90%로 설정하며, Incus의 live update 후 한도가 초기화돼도 5초마다 복원한다. 위험 상태에서 프로세스를 강제 종료하거나 인스턴스를 재시작하지 않는다.
+설치된 Incus 7.0.1은 `128MiB,7200iops`를 거부한다. 보조 서비스는 기존 Incus IOPS 설정과 hard RAM 한도를 유지하고 `io.max`의 `rbps/wbps`만 별도로 설정한다. 3개 Incus의 soft 한도는 각각 실제 `memory.max`의 93%로 설정하며, Incus의 live update 후 한도가 초기화돼도 5초마다 복원한다. 위험 상태에서 프로세스를 강제 종료하거나 인스턴스를 재시작하지 않는다.
 
 | 인스턴스 | 읽기 상한 | 쓰기 상한 | hard RAM | soft RAM |
 |---|---:|---:|---|---|
-| fedora-heart | 128MiB/s | 48MiB/s | 기존 설정 유지 | 실제 hard 한도의 90% |
-| fedora-enxsis | 64MiB/s | 16MiB/s | 기존 설정 유지 | 기존 값 유지 |
-| fedora-musecat | 128MiB/s | 64MiB/s | 기존 설정 유지 | 기존 값 유지 |
+| fedora-heart | 128MiB/s | 48MiB/s | 기존 설정 유지 | 실제 hard 한도의 93% |
+| fedora-enxsis | 64MiB/s | 16MiB/s | 기존 설정 유지 | 실제 hard 한도의 93% |
+| fedora-musecat | 128MiB/s | 64MiB/s | 기존 설정 유지 | 실제 hard 한도의 93% |
 
 각각 기존 read 7,200 / write 12,600 IOPS도 유지한다. 이 정책은 `/etc/coolify-fixkit/host-policy.json`이 소유한다. 한도 변경 시 이 파일을 검토하고 서비스를 재시작한다. `raw.lxc`에 별도 memory.high를 다시 추가해 두 소유자가 경쟁하게 만들지 않는다. 이 정책은 이름을 명시한 3개 인스턴스에만 적용한다.
 
@@ -158,9 +158,11 @@ resource-guard는 루프가 완료될 때만 tmpfs `/tmp/resource-guard-heartbea
 
 전체 흐름은 다음과 같다.
 
-1. **호스트 보호:** 5초마다 guest SSD 대역폭과 heart의 memory.high를 조정하고 중요 프로세스의 OOM 우선순위를 유지한다. hard RAM과 IOPS는 보존한다. 프로세스별 I/O는 60초마다 수집한다.
+1. **호스트 보호:** 5초마다 guest SSD 대역폭과 각 guest의 memory.high를 조정하고 중요 프로세스의 OOM 우선순위를 유지한다. hard RAM과 IOPS는 보존한다. 프로세스별 I/O는 60초마다 수집한다.
 2. **자원 감시:** RAM 여유, PSI, guest RAM/swap/한도, 계층 OOM 카운터와 증가 추세를 확인한다. host와 guest의 계층 카운터를 별도 OOM으로 더하지 않는다.
 3. **OOM 복구:** 허용 라벨이 있고 최근 OOM으로 이미 종료된 컨테이너만 검사한다. 자원이 안정되고 새 배포가 없으며 cooldown과 시작 예산을 통과한 경우에만 start한다. 실행 중인 업무를 종료하지 않는다.
 4. **개인 알림:** 3회 연속 압박/해소 및 OOM 변화를 Unix socket과 기존 Discord bot DM으로 알린다. 영속 outbox, 중복 제한, retry와 nonce를 사용한다. 공유 표본 지연과 통신 시간 때문에 정확히 15초마다 보장되는 알림은 아니다.
 5. **TLS:** 반복 TLS 실패를 관찰한다. 기존 중요 프록시의 최후 수단 재시작은 별도의 명시적 설정 두 개가 모두 켜져야 한다.
 6. **자체 감시:** 실제 진행 시각과 systemd watchdog으로 Healer 자체가 멈추는 것을 감지하고 해당 감시기만 복구한다.
+
+2026-11-04 RAM 기준: 각 Incus의 memory.high를 실제 memory.max의 93%로 설정한다(커널 페이지 크기로 내림). guest 여유 판단은 hard 한도의 93%와 별도 soft 한도 중 더 낮은 값과 비교하며, soft 한도에 여유율을 다시 곱하지 않는다. 시작 메모리 예산도 같은 경계에 포함한다. 호스트 4GiB reserve, PSI 압박 감지와 중요 서비스 OOM 보호는 계속 적용한다. 이는 Incus 단위 정책이며 내부 Docker 컨테이너마다 새 RAM 상한을 배분하는 설정은 아니다.
