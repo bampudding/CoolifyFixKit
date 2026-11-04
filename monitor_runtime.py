@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import select
 import time
 
 METRICS = Path('/run/coolify-fixkit/metrics.json')
@@ -11,13 +12,16 @@ HEARTBEAT = Path('/tmp/resource-guard-heartbeat.json')
 class StopFlag:
     # Python signal handlers must never acquire Event/Condition locks: a signal
     # can interrupt wait() while the same thread already owns its mutex.
-    def __init__(self): self.stopped = False
-    def set(self, *_): self.stopped = True
+    def __init__(self):
+        self.stopped = False
+        self.read_fd, self.write_fd = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
+    def set(self, *_):
+        self.stopped = True
+        try: os.write(self.write_fd, b'1')
+        except BlockingIOError: pass
     def is_set(self): return self.stopped
     def wait(self, seconds):
-        deadline = time.monotonic() + seconds
-        while not self.stopped and time.monotonic() < deadline:
-            time.sleep(min(.2, max(0, deadline-time.monotonic())))
+        if not self.stopped: select.select([self.read_fd], [], [], seconds)
         return self.stopped
 
 def publish(path, value):
