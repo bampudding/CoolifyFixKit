@@ -41,7 +41,7 @@ class PolicyTests(unittest.TestCase):
         delivery.enqueue.assert_not_called()
 
     def test_weekly_handles_guest_replacement_without_counter_double_count(self):
-        def journal(*args):
+        def journal(*args,**kwargs):
             if '-k' in args:return iter([])
             if 'coolify-fixkit-discord' in args:return iter([])
             rows=[]

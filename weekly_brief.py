@@ -3,14 +3,15 @@ import argparse
 from collections import defaultdict,Counter
 import datetime as dt
 import json
+from pathlib import Path
 import re
 import subprocess
 from zoneinfo import ZoneInfo
 from event_webhook import post_event
 
 
-def journal(*args):
-    p=subprocess.Popen(['journalctl',*args,'--no-pager','-o','cat'],stdout=subprocess.PIPE,text=True)
+def journal(*args,json_output=False):
+    p=subprocess.Popen(['journalctl',*args,'--no-pager','-o','json' if json_output else 'cat'],stdout=subprocess.PIPE,text=True)
     try:
         for line in p.stdout:yield line
     finally:
@@ -21,13 +22,23 @@ def journal(*args):
 
 def oom_context(seconds=604800,limit=4):
     result=[]
-    for line in journal('-k','--since',f'{seconds} seconds ago','--grep','oom-kill:','-n','30'):
-        if 'CONSTRAINT_MEMCG' not in line and 'oom-kill:' not in line:continue
+    try:known=set(json.loads(Path('/etc/coolify-fixkit/test-containers.json').read_text()))
+    except (OSError,ValueError,TypeError):known=set()
+    tests=0
+    for raw in journal('-k','--since',f'{seconds} seconds ago','--grep','oom-kill:','-n','30',json_output=True):
+        try:
+            row=json.loads(raw);line=row['MESSAGE'];when=float(row['__REALTIME_TIMESTAMP'])/1e6
+        except (ValueError,KeyError,TypeError):continue
+        if any(ident in line for ident in known):tests+=1;continue
         task=re.search(r'(?:^|,)task=([^,\s]+)',line);pid=re.search(r'(?:^|,)pid=(\d+)',line)
         owner=re.search(r'lxc.payload.([^/,\s]+)',line)
         if task:
-            result.append(f"- {owner.group(1) if owner else '호스트'} / {task.group(1)} (PID {pid.group(1) if pid else '?'}) — 커널 OOM 종료 대상")
-    return '\n'.join(result[-limit:])
+            when_text=dt.datetime.fromtimestamp(when,ZoneInfo('Asia/Seoul')).strftime('%m/%d %H:%M')
+            result.append((when,f"- {when_text} KST: {owner.group(1) if owner else '호스트'} / {task.group(1)} (PID {pid.group(1) if pid else '?'}) — 커널 OOM 종료"))
+    result.sort()
+    text='\n'.join(x[1] for x in result[-limit:])
+    if tests:text+=f"\n알려진 검증용 OOM {tests}건은 업무 종료 기록에서 제외했습니다."
+    return text.strip()
 
 
 def build_brief():
@@ -60,7 +71,8 @@ def build_brief():
     if guests:
         owner=max(guests,key=lambda n:guests[n]['write'])
         lines.append(f"- 쓰기가 가장 많은 {owner.removeprefix('lxc.payload.')}의 빌드·백업 실행 이력을 확인하세요.")
-    if top:lines.append('- I/O 상위 작업 표본: '+', '.join(n for n,_ in top.most_common(3)))
+    tasks=[n for n,_ in top.most_common() if n not in ('systemd','grep','journalctl','docker','incus','bash','sh')]
+    if tasks:lines.append('- I/O 상위 작업 표본(원인 확정 아님): '+', '.join(tasks[:3]))
     lines+=['- 실제 서비스 응답 상태는 이 자료에서 확인하지 않았습니다.','',f"발송 이력: OOM {counts['oom']}건 / 장기 점유 {counts['pressure']}건 / 복구 요청 {counts['recovery']}건",f"전환 전 일반 알림 {counts['legacy_pressure']}건은 장기 점유 집계에서 제외했습니다.",'쓰기량은 guest 블록 카운터 차이이며 실제 NAND 쓰기량과 다릅니다. 로그 공백·교체 시 누락될 수 있습니다.']
     return '\n'.join(lines)[:1200],now.strftime('%G-W%V')
 
