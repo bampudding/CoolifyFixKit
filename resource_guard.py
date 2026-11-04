@@ -15,9 +15,9 @@ from pathlib import Path
 import re
 import signal
 import subprocess
-import threading
 import time
 from event_webhook import post_event
+from monitor_runtime import StopFlag, METRICS, heartbeat
 
 MIB = 1024**2
 GIB = 1024**3
@@ -96,6 +96,21 @@ def snapshot(proc, cgroups):
             errors.append({"cgroup": path.name, "error": type(exc).__name__})
     return {"time": time.time(), "boot": (proc / "sys/kernel/random/boot_id").read_text().strip(),
             "host": host, "guests": guests, "errors": errors}
+
+
+def shared_snapshot(proc, cgroups):
+    """Use the host's fresh tmpfs sample; fail back to direct reads on any issue."""
+    try:
+        sample = json.loads(METRICS.read_text())
+        if (0 <= time.time()-sample['time'] <= 15 and
+                sample['boot'] == (proc/'sys/kernel/random/boot_id').read_text().strip()):
+            # Validate nested data before accepting a cached observation.
+            reasons(sample)
+            for guest in sample['guests'].values(): reasons(sample, guest=guest)
+            return sample
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return snapshot(proc, cgroups)
 
 
 def reasons(sample, reserve=4 * GIB, required=0, guest=None):
@@ -203,6 +218,9 @@ def scopes(incus, proc):
 def inventory(scope):
     # Include replacements that have opted OUT as well; an old deployment must
     # never be resurrected just because its replacement dropped the opt-in label.
+    if not docker(scope, "ps", "-aq", "--filter", "label=" + LABEL + "oom-recover=true",
+                  "--filter", "status=exited").split():
+        return []
     ids = docker(scope, "ps", "-aq").split()
     if not ids:
         return []
@@ -363,15 +381,15 @@ def main():
             emit("admission", allowed=False, reasons=["telemetry-unavailable"])
             return 1
     store = Store(args.state)
-    stop = threading.Event()
+    stop = StopFlag()
     for sig in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(sig, lambda *_: stop.set())
+        signal.signal(sig, stop.set)
     previous, healthy, tick = None, 0, 0
     last_log, last_warnings = float("-inf"), None
     apply = os.getenv("GUARD_APPLY", "false") == "true"
     while not stop.is_set():
         try:
-            sample = snapshot(args.proc, args.cgroups)
+            sample = shared_snapshot(args.proc, args.cgroups)
             blocked = reasons(sample, reserve)
             guest_warnings = {name: reasons(sample, reserve, guest=guest)
                               for name, guest in sample["guests"].items()}
@@ -397,6 +415,7 @@ def main():
                 return 1
         if args.mode == "once":
             return 0
+        heartbeat()
         tick += 1
         stop.wait(interval)
     return 0

@@ -15,6 +15,7 @@ import urllib.error
 import urllib.request
 import uuid
 import resource_guard as metrics
+from monitor_runtime import notify_watchdog
 
 
 def request(token,path,data):
@@ -108,7 +109,7 @@ def watch(delivery,stop):
     previous=None;bad=good=0;active=delivery.data.get('pressure_active',False)
     while not stop.is_set():
         try:
-            sample=metrics.snapshot(Path('/proc'),Path('/sys/fs/cgroup'))
+            sample=metrics.shared_snapshot(Path('/proc'),Path('/sys/fs/cgroup'))
             events=metrics.changes(previous,sample)
             if events:
                 total=sum(x['oom_kill_delta'] for x in events if x['scope']=='host-inclusive')
@@ -141,6 +142,7 @@ def watch(delivery,stop):
             print(json.dumps({'event':'discord-monitor-error'}),flush=True)
         try:delivery.deliver()
         except (OSError,ValueError,KeyError):print(json.dumps({'event':'discord-delivery-config-error'}),flush=True)
+        notify_watchdog()
         stop.wait(5)
 
 

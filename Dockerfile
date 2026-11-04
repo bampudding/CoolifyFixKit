@@ -6,6 +6,7 @@ WORKDIR /app
 
 COPY check_and_heal.sh /app/check_and_heal.sh
 COPY resource_guard.py /app/resource_guard.py
+COPY monitor_runtime.py /app/monitor_runtime.py
 COPY event_webhook.py /app/event_webhook.py
 RUN chmod +x /app/check_and_heal.sh
 

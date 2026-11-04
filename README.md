@@ -143,3 +143,24 @@ journalctl -u coolify-fixkit-discord.service -o cat
 ```
 
 테스트 명령은 실행 중인 웹훅으로 한 건을 보내 실제 DM 발송을 요청한다. 로컬 웹훅은 `kind`(oom/pressure/recovered/policy-error/recovery/test), 선택적 `scope`, `message`만 받으며 외부 TCP 포트는 열지 않는다. 소켓 디렉터리를 선택적으로 resource-guard에 읽기 전용 마운트하면 컨테이너 복구 이벤트도 전달할 수 있다. 소켓이 없을 때 guard는 기존 작업을 계속한다.
+
+## 감시 효율과 자체 복구 (2026-11-04)
+
+호스트 보조 감시기가 5초마다 자원 표본을 `/run/coolify-fixkit/metrics.json`에 원자적으로 게시한다. `/run`은 tmpfs이므로 이 표본은 SSD에 기록하지 않는다. Discord와 resource-guard는 같은 boot의 15초 이내 표본을 공유한다. 표본이 없거나 오래됐거나 잘못된 경우 각자 실제 proc/cgroup을 읽어 감시를 유지한다. 실행 전 입장 검사와 복구 시작 직전에는 공유 표본 대신 최신 값을 직접 읽는다.
+
+resource-guard는 라벨로 허용된 종료 컨테이너가 있을 때만 전체 배포 목록을 inspect한다. 교체 배포 확인, 영속 cooldown, 시작 메모리 검사와 기존 OOM 복구 제한은 유지한다. 정상 전체 로그는 60초 주기이며 사건과 상태 변화는 즉시 기록한다.
+
+SIGTERM/SIGINT 처리기는 락 없는 종료 플래그만 변경한다. Event.wait 도중 신호 처리기가 Event.set의 같은 mutex를 다시 잡으려는 교착 가능성을 제거한다. 이번 장애의 Python 사용자 스택은 확보하지 못했으므로 관측된 정지의 원인을 이것으로 확정하지는 않는다.
+
+resource-guard는 루프가 완료될 때만 tmpfs `/tmp/resource-guard-heartbeat.json`을 갱신한다. 호스트 감시기는 30초마다 `io.coolify-fixkit.watchdog=true`와 Compose 서비스 `resource-guard` 라벨을 **모두** 가진 감시기만 확인한다. 시작 후 120초 유예, 생존 신호 120초 초과 시 감시기만 재시작하며 컨테이너별 10분 cooldown을 둔다. 애플리케이션, Incus, Caddy는 이 watchdog의 대상이 아니다. 라벨은 정규 Compose에 포함해야 재배포 후에도 유지된다.
+
+호스트 감시기와 Discord 감시 스레드는 완료된 감시 루프에서만 systemd watchdog에 알린다. `WatchdogSec=90`을 넘겨 진행이 멈추면 systemd가 해당 보조 서비스만 복구한다. host unit의 RuntimeDirectory와 ReadWritePaths 변경도 함께 설치해야 한다. 네이티브 설치 디렉터리에는 `monitor_runtime.py`, `resource_guard.py`, `event_webhook.py`가 필요하다.
+
+전체 흐름은 다음과 같다.
+
+1. **호스트 보호:** 5초마다 guest SSD 대역폭과 heart의 memory.high를 조정하고 중요 프로세스의 OOM 우선순위를 유지한다. hard RAM과 IOPS는 보존한다. 프로세스별 I/O는 60초마다 수집한다.
+2. **자원 감시:** RAM 여유, PSI, guest RAM/swap/한도, 계층 OOM 카운터와 증가 추세를 확인한다. host와 guest의 계층 카운터를 별도 OOM으로 더하지 않는다.
+3. **OOM 복구:** 허용 라벨이 있고 최근 OOM으로 이미 종료된 컨테이너만 검사한다. 자원이 안정되고 새 배포가 없으며 cooldown과 시작 예산을 통과한 경우에만 start한다. 실행 중인 업무를 종료하지 않는다.
+4. **개인 알림:** 3회 연속 압박/해소 및 OOM 변화를 Unix socket과 기존 Discord bot DM으로 알린다. 영속 outbox, 중복 제한, retry와 nonce를 사용한다. 공유 표본 지연과 통신 시간 때문에 정확히 15초마다 보장되는 알림은 아니다.
+5. **TLS:** 반복 TLS 실패를 관찰한다. 기존 중요 프록시의 최후 수단 재시작은 별도의 명시적 설정 두 개가 모두 켜져야 한다.
+6. **자체 감시:** 실제 진행 시각과 systemd watchdog으로 Healer 자체가 멈추는 것을 감지하고 해당 감시기만 복구한다.

@@ -29,11 +29,14 @@ services:
   resource-guard:
     build: .
     command: [python3, /app/resource_guard.py, watch]
+    labels:
+      io.coolify-fixkit.watchdog: "true"
     restart: unless-stopped
     environment:
       GUARD_APPLY: "${GUARD_APPLY:-false}"
       HOST_RESERVE_MIB: "${HOST_RESERVE_MIB:-4096}"
       INCUS_ENABLED: "false"
+      GOMAXPROCS: "2"
       INCUS_CONF: /tmp/incus
     mem_limit: 128m
     cpus: 0.25

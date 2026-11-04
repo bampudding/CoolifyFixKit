@@ -11,9 +11,10 @@ from pathlib import Path
 import re
 import signal
 import subprocess
-import threading
 import time
 from event_webhook import post_event
+from monitor_runtime import StopFlag, METRICS, publish, notify_watchdog
+from resource_guard import snapshot
 
 MIB = 1024**2
 
@@ -282,6 +283,38 @@ def io_deltas(previous,current,seconds):
     return sorted(rows,key=lambda x:x['write_bps']+x['read_bps'],reverse=True)[:12]
 
 
+def supervise_guards(attempts, apply):
+    """Only explicitly labelled Healer guards may be restarted, never workloads."""
+    try:
+        result=subprocess.run(['docker','ps','-q','--filter','label=io.coolify-fixkit.watchdog=true',
+            '--filter','label=com.docker.compose.service=resource-guard'],capture_output=True,text=True,timeout=3,check=True)
+        ids=result.stdout.split()
+        if not ids:return
+        if len(ids)>4:raise ValueError('watchdog inventory budget')
+        fmt='[{{json .Id}},{{json .State.Pid}},{{json .State.StartedAt}}]'
+        result=subprocess.run(['docker','inspect','--format',fmt,*ids],capture_output=True,text=True,timeout=3,check=True)
+        import datetime
+        for line in result.stdout.splitlines():
+            ident,pid,started=json.loads(line)
+            if not re.fullmatch(r'[a-f0-9]{64}',ident) or type(pid) is not int or pid<=0:continue
+            age=time.time()-datetime.datetime.fromisoformat(started.replace('Z','+00:00')).timestamp()
+            if age<120:continue
+            try:
+                beat=json.loads((Path('/proc')/str(pid)/'root/tmp/resource-guard-heartbeat.json').read_text())
+                stale=not 0<=time.monotonic()-beat['monotonic']<=120
+            except (OSError,ValueError,KeyError,TypeError):stale=True
+            if not stale or time.monotonic()-attempts.get(ident,float('-inf'))<600:continue
+            attempts[ident]=time.monotonic()
+            print(json.dumps({'event':'guard-stale','container':ident,'apply':apply}),flush=True)
+            post_event('policy-error','resource-guard','감시 루프 생존 신호가 멈췄습니다. Healer 감시기만 복구합니다.')
+            if apply:
+                subprocess.run(['docker','restart','--time','5',ident],capture_output=True,timeout=15,check=True)
+        for ident in list(attempts):
+            if ident not in ids:del attempts[ident]
+    except (OSError,ValueError,KeyError,TypeError,subprocess.SubprocessError):
+        print(json.dumps({'event':'guard-watchdog-error'}),flush=True)
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--policy',type=Path,required=True)
@@ -291,11 +324,19 @@ def main():
     policy=validate(json.loads(args.policy.read_text()))
     device,disk=root_device()
     root=Path('/sys/fs/cgroup')
-    stop=threading.Event()
-    for sig in (signal.SIGTERM,signal.SIGINT):signal.signal(sig,lambda *_:stop.set())
+    stop=StopFlag()
+    for sig in (signal.SIGTERM,signal.SIGINT):signal.signal(sig,stop.set)
     old_io=process_io();old_time=time.monotonic();next_sample=old_time
     container_groups=[];next_discovery=0
+    watchdog_next=0; watchdog_attempts={}
     while not stop.is_set():
+        try:
+            publish(METRICS, snapshot(Path("/proc"), root))
+        except (OSError, ValueError, KeyError):
+            print(json.dumps({"event":"metrics-publish-error"}),flush=True)
+        if time.monotonic() >= watchdog_next:
+            supervise_guards(watchdog_attempts, args.apply)
+            watchdog_next=time.monotonic()+30
         discovery_error=None
         try:
             refresh=time.monotonic()>=next_discovery
@@ -329,6 +370,7 @@ def main():
                 'io_pressure':Path('/proc/pressure/io').read_text().strip()}),flush=True)
             old_io=current;old_time=now;next_sample=now+60
         if args.once:return 1 if discovery_error else 0
+        notify_watchdog()
         stop.wait(5)
     return 0
 
