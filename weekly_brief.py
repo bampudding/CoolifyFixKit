@@ -25,7 +25,7 @@ def oom_context(seconds=604800,limit=4):
     try:known=set(json.loads(Path('/etc/coolify-fixkit/test-containers.json').read_text()))
     except (OSError,ValueError,TypeError):known=set()
     tests=0
-    for raw in journal('-k','--since',f'{seconds} seconds ago','--grep','oom-kill:','-n','30',json_output=True):
+    for raw in journal('_TRANSPORT=kernel','--since',f'{seconds} seconds ago','--grep','oom-kill:','-n','30',json_output=True):
         try:
             row=json.loads(raw);line=row['MESSAGE'];when=float(row['__REALTIME_TIMESTAMP'])/1e6
         except (ValueError,KeyError,TypeError):continue
@@ -63,7 +63,7 @@ def build_brief():
         if row.get('event')=='discord-delivered':counts['legacy_pressure' if row.get('kind')=='pressure' and row.get('policy_version')!=2 else row.get('kind')]+=1
     zone=ZoneInfo('Asia/Seoul');now=dt.datetime.now(zone)
     period=(dt.datetime.fromtimestamp(first,zone).strftime('%m/%d %H:%M')+' ~ '+dt.datetime.fromtimestamp(last,zone).strftime('%m/%d %H:%M')) if first else '관측 자료 없음'
-    lines=[f"**이번 주 서버 운영 요약**",f"관측: {period} KST ({samples:,}개 표본)",'', '**실제 종료 기록**',oom_context() or '- 보존된 커널 로그에서 OOM 종료를 찾지 못했습니다.','', '**RAM 최고 사용 / SSD 쓰기**']
+    lines=[f"**이번 주 서버 운영 요약**",f"관측: {period} KST ({samples:,}개 표본)",'', '**최근 7일의 실제 종료 기록**',oom_context() or '- 보존된 커널 로그에서 OOM 종료를 찾지 못했습니다.','', '**RAM 최고 사용 / SSD 쓰기**']
     for name,x in guests.items():
         cap=f" / {int(x['cap'])/2**30:.2f}GiB" if x['cap']!='max' else ''
         lines.append(f"- {name.removeprefix('lxc.payload.')}: {x['peak']/2**30:.2f}GiB{cap}, 93% 이상 {x['high_minutes']}표본, 쓰기 {x['write']/2**30:.1f}GiB")
@@ -73,7 +73,7 @@ def build_brief():
         lines.append(f"- 쓰기가 가장 많은 {owner.removeprefix('lxc.payload.')}의 빌드·백업 실행 이력을 확인하세요.")
     tasks=[n for n,_ in top.most_common() if n not in ('systemd','grep','journalctl','docker','incus','bash','sh')]
     if tasks:lines.append('- I/O 상위 작업 표본(원인 확정 아님): '+', '.join(tasks[:3]))
-    lines+=['- 실제 서비스 응답 상태는 이 자료에서 확인하지 않았습니다.','',f"발송 이력: OOM {counts['oom']}건 / 장기 점유 {counts['pressure']}건 / 복구 요청 {counts['recovery']}건",f"전환 전 일반 알림 {counts['legacy_pressure']}건은 장기 점유 집계에서 제외했습니다.",'쓰기량은 guest 블록 카운터 차이이며 실제 NAND 쓰기량과 다릅니다. 로그 공백·교체 시 누락될 수 있습니다.']
+    lines+=['- 실제 서비스 응답 상태는 이 자료에서 확인하지 않았습니다.','','쓰기량은 guest 블록 카운터 차이이며 실제 NAND 쓰기량과 다릅니다. 로그 공백·교체 시 누락될 수 있습니다.']
     return '\n'.join(lines)[:1200],now.strftime('%G-W%V')
 
 
