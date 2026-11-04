@@ -1,0 +1,10 @@
+[Unit]
+Description=Send one weekly Coolify Healer Now Brief
+
+[Timer]
+OnCalendar=Mon *-*-* 09:00:00 Asia/Seoul
+Persistent=true
+Unit=coolify-fixkit-weekly.service
+
+[Install]
+WantedBy=timers.target

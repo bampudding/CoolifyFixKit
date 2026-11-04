@@ -264,7 +264,9 @@ def process_io():
             info=pairs((p/'io').read_text())
             cg=(p/'cgroup').read_text().strip().split('0::',1)[1]
             result[p.name]={'comm':(p/'comm').read_text().strip(), 'cgroup':cg,
-                            'read':info['read_bytes:'],'write':info['write_bytes:']}
+                            'read':info['read_bytes:'],'write':info['write_bytes:'],
+                            'rss':int((p/'statm').read_text().split()[1])*os.sysconf('SC_PAGE_SIZE'),
+                            'start':(p/'stat').read_text().rsplit(')',1)[1].split()[19]}
         except (OSError,ValueError,KeyError,IndexError):
             continue
     return result
@@ -274,12 +276,12 @@ def io_deltas(previous,current,seconds):
     rows=[]
     for pid,p in current.items():
         old=previous.get(pid)
-        if not old or (p['comm'],p['cgroup']) != (old['comm'],old['cgroup']):continue
+        if not old or (p['comm'],p['cgroup'],p.get('start')) != (old['comm'],old['cgroup'],old.get('start')):continue
         read=p['read']-old['read'];write=p['write']-old['write']
         if min(read,write)<0:continue
         if read or write:
             rows.append({'pid':int(pid),'comm':p['comm'],'cgroup':p['cgroup'],
-                         'read_bps':round(read/seconds),'write_bps':round(write/seconds)})
+                         'start':p.get('start'), 'read_bps':round(read/seconds),'write_bps':round(write/seconds)})
     return sorted(rows,key=lambda x:x['write_bps']+x['read_bps'],reverse=True)[:12]
 
 
@@ -363,6 +365,9 @@ def main():
                 if args.once:return 1
         if time.monotonic()>=next_sample:
             current=process_io();now=time.monotonic()
+            top=io_deltas(old_io,current,max(1,now-old_time))
+            memory=sorted(({'pid':int(pid),**v} for pid,v in current.items()),key=lambda x:x['rss'],reverse=True)[:6]
+            publish(Path('/run/coolify-fixkit/top-resources.json'),{'time':time.time(),'io':top,'memory':memory})
             print(json.dumps({'time':time.time(),'event':'host-io','device':device,'disk':disk,
                 'guests':telemetry(root,device),
                 'top_io':io_deltas(old_io,current,max(1,now-old_time)),

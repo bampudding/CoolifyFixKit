@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Private local webhook + bounded, persistent Discord bot DM delivery."""
 import argparse
-from collections import deque
 import fcntl
 import hashlib
 from http.server import BaseHTTPRequestHandler
@@ -16,6 +15,7 @@ import urllib.request
 import uuid
 import resource_guard as metrics
 from monitor_runtime import notify_watchdog
+from alert_policy import Incidents, stamp
 
 
 def request(token,path,data):
@@ -45,6 +45,10 @@ class Delivery:
         fcntl.flock(self.lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         self.data=json.loads(self.path.read_text()) if self.path.exists() else {'pending':[],'sent':{}}
         self.mutex=threading.Lock();self.channel=None;self.next_try=0
+        old=self.data['pending']
+        self.data['pending']=[x for x in old if x['key'].split(':')[0]!='recovered' and
+            not (x['key'].split(':')[0]=='pressure' and not x.get('incident'))]
+        if len(old)!=len(self.data['pending']):self.save()
 
     def save(self):
         tmp=self.path.with_suffix('.tmp')
@@ -52,24 +56,43 @@ class Delivery:
             json.dump(self.data,f);f.flush();os.fsync(f.fileno())
         tmp.chmod(0o600);tmp.replace(self.path)
 
-    def enqueue(self,event):
+    def enqueue(self,event, *, incident=None):
         if not isinstance(event,dict) or set(event)-{'kind','scope','message'}:raise ValueError('invalid event')
         kind=event.get('kind');scope=event.get('scope','debian');message=event.get('message','')
-        if kind not in ('oom','pressure','recovered','policy-error','recovery','test'):raise ValueError('invalid kind')
+        if kind not in ('oom','pressure','recovered','policy-error','recovery','weekly','test'):raise ValueError('invalid kind')
         if not isinstance(scope,str) or len(scope)>120 or not isinstance(message,str) or len(message)>1200:
             raise ValueError('invalid message')
         key=kind+':'+scope
+        if incident:key+=':'+incident
+        elif kind=='policy-error':key+=':'+hashlib.sha256(message.encode()).hexdigest()[:12]
         with self.mutex:
-            if kind!='test' and (time.time()-self.data['sent'].get(key,0)<300 or
+            if kind=='recovered':return False
+            if kind=='weekly' and key in self.data.get('weekly_sent',{}):return False
+            if kind!='test' and (time.time()-self.data['sent'].get(key,0)<(1800 if kind=='policy-error' else 300) or
                 any(x['key']==key for x in self.data['pending'])):return False
             if len(self.data['pending'])>=100:raise ValueError('outbox full')
-            self.data['pending'].append({'key':key,'nonce':uuid.uuid4().hex[:24],
-                'text':f'[Coolify Healer] '+{'oom':'OOM 감지','pressure':'자원 압박','recovered':'압박 해소','policy-error':'보호 정책 오류','recovery':'자동 복구','test':'연결 확인'}[kind]+f'\n대상: {scope}\n{message}'.rstrip(),'created':time.time()})
+            titles={'oom':'OOM 종료 감지','pressure':'자원 상태','recovered':'자원 상태 해소','policy-error':'보호 기능 점검 필요','recovery':'컨테이너 복구 요청','weekly':'Now Brief','test':'알림 연결 확인'}
+            scope_name={'memory':'메모리','io':'디스크 I/O'}.get(scope,scope)
+            self.data['pending'].append({'key':key,'kind':kind,'incident':incident,'nonce':uuid.uuid4().hex[:24],
+                'text':f"**Coolify Healer | {titles[kind]}**\n대상: {scope_name} / {stamp(time.time())}\n{message}".rstrip(),
+                'created':time.time()})
             self.save();return True
+
+    def cancel_incident(self,incident):
+        with self.mutex:
+            self.data['pending']=[x for x in self.data['pending'] if x.get('incident')!=incident]
+            self.save()
 
     def deliver(self):
         with self.mutex:
             if not self.data['pending'] or time.monotonic()<self.next_try:return False
+            while self.data['pending']:
+                candidate=self.data['pending'][0]
+                kind=candidate.get('kind',candidate['key'].split(':')[0])
+                ttl=900 if kind in ('pressure','recovered') else (604800 if kind=='weekly' else 86400)
+                if time.time()-candidate['created']<=ttl:break
+                self.data['pending'].pop(0);self.save()
+            if not self.data['pending']:return False
             item=dict(self.data['pending'][0])
         config=json.loads(self.credentials.read_text())
         try:
@@ -83,8 +106,10 @@ class Delivery:
         with self.mutex:
             self.data['pending'].pop(0);self.data['sent'][item['key']]=time.time()
             self.data['sent']={k:v for k,v in self.data['sent'].items() if time.time()-v<86400}
+            if item.get('kind')=='weekly':
+                self.data.setdefault('weekly_sent',{})[item['key']]=time.time()
             self.save()
-        print(json.dumps({'event':'discord-delivered','kind':item['key'].split(':')[0],'message_id':response['id']}),flush=True)
+        print(json.dumps({'event':'discord-delivered','kind':item['key'].split(':')[0],'policy_version':2,'message_id':response['id']}),flush=True)
         return True
 
 
@@ -106,39 +131,30 @@ class Server(socketserver.UnixStreamServer):
 
 
 def watch(delivery,stop):
-    previous=None;bad=good=0;active=delivery.data.get('pressure_active',False)
+    previous=None;policy=Incidents(delivery)
     while not stop.is_set():
         try:
             sample=metrics.shared_snapshot(Path('/proc'),Path('/sys/fs/cgroup'))
-            events=metrics.changes(previous,sample)
+            baseline=previous or delivery.data.get('oom_baseline')
+            events=metrics.changes(baseline,sample)
             if events:
                 total=sum(x['oom_kill_delta'] for x in events if x['scope']=='host-inclusive')
-                scopes=[x['scope'] for x in events if x['scope']!='host-inclusive']
-                delivery.enqueue({'kind':'oom','scope':'debian','message':f'OOM 종료 {total}건 감지. 하위 대상: '+(', '.join(scopes) or '호스트 컨테이너/서비스')})
-            reasons=metrics.reasons(sample)
-            for name,guest in sample['guests'].items():
-                reasons.extend(name+':'+r for r in metrics.reasons(sample,guest=guest) if r in ('guest-memory-pressure','guest-io-stall'))
-            bad=bad+1 if reasons else 0;good=good+1 if not reasons else 0
-            if bad>=3 and not active:
-                host=sample['host']
-                context={'event':'resource-pressure','time':sample['time'],'reasons':reasons,
-                    'available_mib':round(host['available']/metrics.MIB),
-                    'memory_some_avg10':host['memory_psi']['some']['avg10'],
-                    'io_full_avg10':host['io_psi']['full']['avg10']}
-                print(json.dumps(context),flush=True)
-                detail=f"여유 RAM {context['available_mib']}MiB, 메모리 대기 {context['memory_some_avg10']:.2f}%, I/O 전체 대기 {context['io_full_avg10']:.2f}%. "
-                delivery.enqueue({'kind':'pressure','scope':'debian','message':('15초 이상 자원 압박 지속. '+detail+'원인: '+', '.join(reasons))[:1200]})
-                active=True
+                scopes=[x['scope'].removeprefix('lxc.payload.') for x in events if x['scope']!='host-inclusive']
+                body=f"**긴급 — OOM 종료 {total}건**\n관측: {stamp(sample['time'])}\n대상: "+(', '.join(scopes) or '호스트 컨테이너/서비스')+"\n확인: 종료된 서비스와 최근 빌드의 메모리를 점검하세요. 이 알림은 복구 성공을 의미하지 않습니다."
+                from weekly_brief import oom_context
+                context=oom_context(max(120,min(604800,sample['time']-delivery.data.get('oom_baseline',{}).get('observed_at',sample['time']-120))),limit=max(1,min(total,4)))
+                if context:body+='\n확인된 종료 기록:\n'+context
+                delivery.enqueue({'kind':'oom','scope':'debian','message':body[:1200]},incident=f"{sample['boot']}:{sample['host']['oom_kill']}")
+            # Persist only small counter baselines, not full telemetry every tick.
+            baseline={'boot':sample['boot'],'host':{'oom_kill':sample['host']['oom_kill']},
+                'guests':{n:{'identity':v['identity'],'events':{'oom_kill':v['events']['oom_kill']}} for n,v in sample['guests'].items()}}
+            if {k:v for k,v in delivery.data.get('oom_baseline',{}).items() if k!='observed_at'}!=baseline:
+                baseline['observed_at']=sample['time']
                 with delivery.mutex:
-                    delivery.data['pressure_active']=True;delivery.save()
-            if active and good>=3:
-                print(json.dumps({'event':'resource-recovered','time':sample['time']}),flush=True)
-                delivery.enqueue({'kind':'recovered','scope':'debian','message':'메모리 및 I/O 압박이 해소됐습니다. 애플리케이션 상태는 별도 확인이 필요합니다.'})
-                active=False
-                with delivery.mutex:
-                    delivery.data['pressure_active']=False;delivery.save()
+                    delivery.data['oom_baseline']=baseline;delivery.save()
+            policy.update(sample)
             previous=sample
-        except (OSError,ValueError,KeyError):
+        except (OSError,ValueError,KeyError,TypeError):
             print(json.dumps({'event':'discord-monitor-error'}),flush=True)
         try:delivery.deliver()
         except (OSError,ValueError,KeyError):print(json.dumps({'event':'discord-delivery-config-error'}),flush=True)
