@@ -80,13 +80,14 @@ class Incidents:
                     active[kind]=episode
                 if gap is None or gap>20:
                     # Downtime is not evidence of continuous pressure.
-                    if not episode['notified']:episode['since']=now
+                    episode['since']=now
+                    episode['tasks']={}
                 if episode['good_since'] is not None and not episode['notified']:episode['since']=now
                 episode['last']=now;episode['good_since']=None;episode['details']=details
                 top=resource_context(kind,episode)
                 duration=now-episode['since'];threshold=600
                 if ((not episode['notified'] and duration>=threshold) or
-                    (episode['notified'] and now-episode['reminder']>=21600)):
+                    (episode['notified'] and duration>=threshold and now-episode['reminder']>=21600)):
                     title='확인 필요 — '+('장시간 메모리 사용' if kind=='memory' else '장시간 I/O 점유')
                     action=('최근 빌드의 동시 실행과 메모리 사용 상위 작업을 확인하세요.' if kind=='memory' else
                             'I/O 상위 작업과 빌드·백업 실행 시간을 확인하세요. 대기율만으로 SSD 고장을 뜻하지는 않습니다.')

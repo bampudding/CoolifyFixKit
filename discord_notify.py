@@ -44,7 +44,7 @@ class Delivery:
         self.lock=(state/'discord-notify.lock').open('a')
         fcntl.flock(self.lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         self.data=json.loads(self.path.read_text()) if self.path.exists() else {'pending':[],'sent':{}}
-        self.mutex=threading.Lock();self.channel=None;self.next_try=0
+        self.mutex=threading.RLock();self.channel=None;self.next_try=0
         old=self.data['pending']
         self.data['pending']=[x for x in old if x['key'].split(':')[0]!='recovered' and
             not (x['key'].split(':')[0]=='pressure' and not x.get('incident'))]
@@ -152,7 +152,7 @@ def watch(delivery,stop):
                 baseline['observed_at']=sample['time']
                 with delivery.mutex:
                     delivery.data['oom_baseline']=baseline;delivery.save()
-            policy.update(sample)
+            with delivery.mutex:policy.update(sample)
             previous=sample
         except (OSError,ValueError,KeyError,TypeError):
             print(json.dumps({'event':'discord-monitor-error'}),flush=True)
