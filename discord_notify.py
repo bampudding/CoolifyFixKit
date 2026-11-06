@@ -16,6 +16,7 @@ import uuid
 import resource_guard as metrics
 from monitor_runtime import notify_watchdog
 from alert_policy import Incidents, stamp
+from disk_capacity import DiskCapacity
 
 
 def request(token,path,data):
@@ -59,7 +60,7 @@ class Delivery:
     def enqueue(self,event, *, incident=None):
         if not isinstance(event,dict) or set(event)-{'kind','scope','message'}:raise ValueError('invalid event')
         kind=event.get('kind');scope=event.get('scope','debian');message=event.get('message','')
-        if kind not in ('oom','pressure','recovered','policy-error','recovery','weekly','test'):raise ValueError('invalid kind')
+        if kind not in ('oom','pressure','recovered','policy-error','recovery','weekly','capacity','test'):raise ValueError('invalid kind')
         if not isinstance(scope,str) or len(scope)>120 or not isinstance(message,str) or len(message)>1200:
             raise ValueError('invalid message')
         key=kind+':'+scope
@@ -71,7 +72,7 @@ class Delivery:
             if kind!='test' and (time.time()-self.data['sent'].get(key,0)<(1800 if kind=='policy-error' else 300) or
                 any(x['key']==key for x in self.data['pending'])):return False
             if len(self.data['pending'])>=100:raise ValueError('outbox full')
-            titles={'oom':'OOM 종료 감지','pressure':'자원 상태','recovered':'자원 상태 해소','policy-error':'보호 기능 점검 필요','recovery':'컨테이너 복구 요청','weekly':'Now Brief','test':'알림 연결 확인'}
+            titles={'oom':'OOM 종료 감지','pressure':'자원 상태','recovered':'자원 상태 해소','policy-error':'보호 기능 점검 필요','recovery':'컨테이너 복구 요청','weekly':'Now Brief','capacity':'SSD 공간 경고','test':'알림 연결 확인'}
             scope_name={'memory':'메모리','io':'디스크 I/O'}.get(scope,scope)
             self.data['pending'].append({'key':key,'kind':kind,'incident':incident,'nonce':uuid.uuid4().hex[:24],
                 'text':f"**Coolify Healer | {titles[kind]}**\n대상: {scope_name} / {stamp(time.time())}\n{message}".rstrip(),
@@ -106,6 +107,11 @@ class Delivery:
         with self.mutex:
             self.data['pending'].pop(0);self.data['sent'][item['key']]=time.time()
             self.data['sent']={k:v for k,v in self.data['sent'].items() if time.time()-v<86400}
+            if item.get('kind')=='capacity':
+                state=self.data.get('disk_capacity',{})
+                incident=item.get('incident') or ''
+                if incident in [state.get('episode','')+':'+str(n) for n in (75,85,95)]:
+                    state['notified_level']=max(state.get('notified_level',0),int(incident.rsplit(':',1)[1]))
             if item.get('kind')=='weekly':
                 self.data.setdefault('weekly_sent',{})[item['key']]=time.time()
             self.save()
@@ -131,7 +137,7 @@ class Server(socketserver.UnixStreamServer):
 
 
 def watch(delivery,stop):
-    previous=None;policy=Incidents(delivery)
+    previous=None;policy=Incidents(delivery);disk_policy=DiskCapacity(delivery)
     while not stop.is_set():
         try:
             sample=metrics.shared_snapshot(Path('/proc'),Path('/sys/fs/cgroup'))
@@ -152,7 +158,9 @@ def watch(delivery,stop):
                 baseline['observed_at']=sample['time']
                 with delivery.mutex:
                     delivery.data['oom_baseline']=baseline;delivery.save()
-            with delivery.mutex:policy.update(sample)
+            with delivery.mutex:
+                policy.update(sample)
+                disk_policy.update()
             previous=sample
         except (OSError,ValueError,KeyError,TypeError):
             print(json.dumps({'event':'discord-monitor-error'}),flush=True)

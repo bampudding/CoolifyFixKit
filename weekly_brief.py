@@ -8,6 +8,7 @@ import re
 import subprocess
 from zoneinfo import ZoneInfo
 from event_webhook import post_event
+from disk_capacity import capacity_snapshot, capacity_text
 
 
 def journal(*args,json_output=False):
@@ -67,6 +68,8 @@ def build_brief():
     for name,x in guests.items():
         cap=f" / {int(x['cap'])/2**30:.2f}GiB" if x['cap']!='max' else ''
         lines.append(f"- {name.removeprefix('lxc.payload.')}: {x['peak']/2**30:.2f}GiB{cap}, 93% 이상 {x['high_minutes']}표본, 쓰기 {x['write']/2**30:.1f}GiB")
+    try:lines+=['','**SSD 공간 현황**',capacity_text(capacity_snapshot())]
+    except (OSError,ValueError):lines+=['','SSD 공간 현황: 측정하지 못했습니다.']
     lines+=['','**우선 확인**']
     if guests:
         owner=max(guests,key=lambda n:guests[n]['write'])

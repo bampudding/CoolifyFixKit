@@ -49,7 +49,7 @@ class NotifyTests(unittest.TestCase):
         for i,base in enumerate([busy]*18+[healthy]*15):
             row=copy.deepcopy(base);row['time']=100+i*5;samples.append(row)
         stop=Mock();stop.is_set.side_effect=[False]*len(samples)+[True]
-        with patch.object(d.metrics,'shared_snapshot',side_effect=samples),patch.object(self.delivery,'deliver'):
+        with patch.object(d.metrics,'shared_snapshot',side_effect=samples),patch.object(self.delivery,'deliver'),patch.object(d,'DiskCapacity'):
             d.watch(self.delivery,stop)
         self.assertEqual(self.delivery.data['pending'],[])
 
